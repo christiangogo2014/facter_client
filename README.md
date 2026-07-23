@@ -42,7 +42,25 @@ cfdi = FacterClient::CFDI.build_income_simple(
   receptor_regimen_fiscal_receptor: '616',
   receptor_uso_cfdi: 'S01',
   conceptos: [
-    { clave_prod_serv: '01010101', cantidad: '1', descripcion: 'Servicio de publicidad', valor_unitario: '1000.00' }
+    {
+      clave_prod_serv: '01010101',
+      cantidad: '1',
+      descripcion: 'Servicio de publicidad',
+      valor_unitario: '1000.00',
+      objeto_imp: '02',
+      impuestos: {
+        'Traslados' => [
+          {
+            'Base' => '1000.00',
+            'Impuesto' => '002',        # IVA
+            'TipoFactor' => 'Tasa',
+            'TasaOCuota' => '0.160000', # 16%
+            'Importe' => '160.00'
+          }
+        ],
+        'Retenciones' => []
+      }
+    }
   ],
   folio: '123'
 )
@@ -100,11 +118,59 @@ The `FacterClient::CFDI` module helps construct valid CFDI 4.0 hashes:
 - `build_income` — full control with hash parameters
 - `build_income_simple` — flat parameters for convenience
 
-Both auto-calculate:
-- SubTotal from conceptos
-- IVA 16% traslados per concepto
-- Total (SubTotal - Descuento + Impuestos)
-- TotalImpuestosTrasladados
+The builder calculates:
+- **SubTotal** — sum of `importe` per concepto (cantidad × valor_unitario)
+- **Total** — SubTotal - Descuento + Traslados - Retenciones
+- **TotalImpuestosTrasladados** — sum of all `Traslados[].Importe`
+- **TotalImpuestosRetenidos** — sum of all `Retenciones[].Importe`
+
+**Taxes are NOT auto-calculated.** You must provide the full `impuestos` hash per concepto with exact `Base`, `Importe`, `TasaOCuota`, etc. The builder only aggregates totals.
+
+### ObjetoImp
+
+- `'01'` — No objeto (exempt, no taxes). Default if not specified.
+- `'02'` — Sí objeto (taxable). You must provide an `impuestos` hash.
+
+### Tax examples
+
+**IVA 16% (traslado):**
+```ruby
+impuestos: {
+  'Traslados' => [
+    { 'Base' => '5000.00', 'Impuesto' => '002', 'TipoFactor' => 'Tasa', 'TasaOCuota' => '0.160000', 'Importe' => '800.00' }
+  ],
+  'Retenciones' => []
+}
+```
+
+**IVA 0% (tasa cero):**
+```ruby
+impuestos: {
+  'Traslados' => [
+    { 'Base' => '5000.00', 'Impuesto' => '002', 'TipoFactor' => 'Tasa', 'TasaOCuota' => '0.000000', 'Importe' => '0.00' }
+  ],
+  'Retenciones' => []
+}
+```
+
+**ISR 10% retention + IVA 16% traslado:**
+```ruby
+impuestos: {
+  'Traslados' => [
+    { 'Base' => '10000.00', 'Impuesto' => '002', 'TipoFactor' => 'Tasa', 'TasaOCuota' => '0.160000', 'Importe' => '1600.00' }
+  ],
+  'Retenciones' => [
+    { 'Base' => '10000.00', 'Impuesto' => '001', 'TipoFactor' => 'Tasa', 'TasaOCuota' => '0.100000', 'Importe' => '1000.00' }
+  ]
+}
+# Total = 10000 + 1600 - 1000 = 10600.00
+```
+
+**Exempt (arrendamiento, etc.):**
+```ruby
+# No impuestos hash needed, just set objeto_imp: '01' (or omit it — default is '01')
+{ descripcion: 'Arrendamiento', valor_unitario: '10000.00', objeto_imp: '01' }
+```
 
 ## Error Handling
 
@@ -137,4 +203,4 @@ The `validate` endpoint does not send an idempotency key (per Facter API spec).
 bundle exec rspec
 ```
 
-51 specs, all passing. Uses WebMock for HTTP stubbing.
+66 specs, all passing. Uses WebMock for HTTP stubbing.

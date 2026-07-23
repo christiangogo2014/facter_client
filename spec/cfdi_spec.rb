@@ -32,7 +32,19 @@ RSpec.describe FacterClient::CFDI do
         unidad: 'Pieza',
         descripcion: 'Producto de prueba',
         valor_unitario: '1000.00',
-        objeto_imp: '02'
+        objeto_imp: '02',
+        impuestos: {
+          'Traslados' => [
+            {
+              'Base' => '1000.00',
+              'Impuesto' => '002',
+              'TipoFactor' => 'Tasa',
+              'TasaOCuota' => '0.160000',
+              'Importe' => '160.00'
+            }
+          ],
+          'Retenciones' => []
+        }
       }
     ]
   end
@@ -78,7 +90,7 @@ RSpec.describe FacterClient::CFDI do
       expect(cfdi['SubTotal']).to eq('1000.00')
     end
 
-    it 'calculates IVA 16% and total when objeto_imp is 02' do
+    it 'sums user-provided traslados and calculates total' do
       cfdi = described_class.build_income(
         emisor: emisor,
         receptor: receptor,
@@ -89,7 +101,7 @@ RSpec.describe FacterClient::CFDI do
       expect(cfdi['Impuestos']['TotalImpuestosTrasladados']).to eq('160.00')
     end
 
-    it 'builds concepto impuestos correctly when objeto_imp is 02' do
+    it 'passes through user-provided concepto impuestos unchanged' do
       cfdi = described_class.build_income(
         emisor: emisor,
         receptor: receptor,
@@ -129,10 +141,34 @@ RSpec.describe FacterClient::CFDI do
       expect(cfdi['LugarExpedicion']).to eq('64000')
     end
 
-    it 'handles multiple conceptos with IVA' do
+    it 'handles multiple conceptos with user-provided taxes' do
       multi_conceptos = [
-        { clave_prod_serv: '01010101', cantidad: '2', descripcion: 'Item A', valor_unitario: '500.00', objeto_imp: '02' },
-        { clave_prod_serv: '01010102', cantidad: '1', descripcion: 'Item B', valor_unitario: '1000.00', objeto_imp: '02' }
+        {
+          clave_prod_serv: '01010101',
+          cantidad: '2',
+          descripcion: 'Item A',
+          valor_unitario: '500.00',
+          objeto_imp: '02',
+          impuestos: {
+            'Traslados' => [
+              { 'Base' => '1000.00', 'Impuesto' => '002', 'TipoFactor' => 'Tasa', 'TasaOCuota' => '0.160000', 'Importe' => '160.00' }
+            ],
+            'Retenciones' => []
+          }
+        },
+        {
+          clave_prod_serv: '01010102',
+          cantidad: '1',
+          descripcion: 'Item B',
+          valor_unitario: '1000.00',
+          objeto_imp: '02',
+          impuestos: {
+            'Traslados' => [
+              { 'Base' => '1000.00', 'Impuesto' => '002', 'TipoFactor' => 'Tasa', 'TasaOCuota' => '0.160000', 'Importe' => '160.00' }
+            ],
+            'Retenciones' => []
+          }
+        }
       ]
 
       cfdi = described_class.build_income(
@@ -162,7 +198,7 @@ RSpec.describe FacterClient::CFDI do
       expect(cfdi['Impuestos']).to be_nil
     end
 
-    it 'calculates IVA only when objeto_imp is explicitly 02' do
+    it 'passes through impuestos hash when objeto_imp is 02' do
       cfdi = described_class.build_income(
         emisor: emisor,
         receptor: receptor,
@@ -207,7 +243,13 @@ RSpec.describe FacterClient::CFDI do
           cantidad: '1',
           descripcion: 'Servicio de publicidad',
           valor_unitario: '5000.00',
-          objeto_imp: '02'
+          objeto_imp: '02',
+          impuestos: {
+            'Traslados' => [
+              { 'Base' => '5000.00', 'Impuesto' => '002', 'TipoFactor' => 'Tasa', 'TasaOCuota' => '0.160000', 'Importe' => '800.00' }
+            ],
+            'Retenciones' => []
+          }
         },
         {
           clave_prod_serv: '80131500',
@@ -235,6 +277,65 @@ RSpec.describe FacterClient::CFDI do
 
       expect(cfdi['Impuestos']['Traslados'].size).to eq(1)
     end
+
+    it 'handles retenciones (ISR, IVA retention)' do
+      conceptos_with_retencion = [
+        {
+          clave_prod_serv: '43232408',
+          cantidad: '1',
+          descripcion: 'Software development services',
+          valor_unitario: '10000.00',
+          objeto_imp: '02',
+          impuestos: {
+            'Traslados' => [
+              { 'Base' => '10000.00', 'Impuesto' => '002', 'TipoFactor' => 'Tasa', 'TasaOCuota' => '0.160000', 'Importe' => '1600.00' }
+            ],
+            'Retenciones' => [
+              { 'Base' => '10000.00', 'Impuesto' => '001', 'TipoFactor' => 'Tasa', 'TasaOCuota' => '0.100000', 'Importe' => '1000.00' }
+            ]
+          }
+        }
+      ]
+
+      cfdi = described_class.build_income(
+        emisor: emisor,
+        receptor: receptor,
+        conceptos: conceptos_with_retencion
+      )
+
+      expect(cfdi['SubTotal']).to eq('10000.00')
+      expect(cfdi['Impuestos']['TotalImpuestosTrasladados']).to eq('1600.00')
+      expect(cfdi['Impuestos']['TotalImpuestosRetenidos']).to eq('1000.00')
+      expect(cfdi['Total']).to eq('10600.00') # 10000 + 1600 - 1000
+    end
+
+    it 'handles IVA 0% (tasa cero)' do
+      conceptos_iva_cero = [
+        {
+          clave_prod_serv: '01010101',
+          cantidad: '1',
+          descripcion: 'Producto exento de IVA (tasa 0%)',
+          valor_unitario: '5000.00',
+          objeto_imp: '02',
+          impuestos: {
+            'Traslados' => [
+              { 'Base' => '5000.00', 'Impuesto' => '002', 'TipoFactor' => 'Tasa', 'TasaOCuota' => '0.000000', 'Importe' => '0.00' }
+            ],
+            'Retenciones' => []
+          }
+        }
+      ]
+
+      cfdi = described_class.build_income(
+        emisor: emisor,
+        receptor: receptor,
+        conceptos: conceptos_iva_cero
+      )
+
+      expect(cfdi['SubTotal']).to eq('5000.00')
+      expect(cfdi['Impuestos']['TotalImpuestosTrasladados']).to eq('0.00')
+      expect(cfdi['Total']).to eq('5000.00')
+    end
   end
 
   describe '.build_income_simple' do
@@ -255,7 +356,7 @@ RSpec.describe FacterClient::CFDI do
 
       expect(cfdi['Version']).to eq('4.0')
       expect(cfdi['Folio']).to eq('456')
-      expect(cfdi['Total']).to eq('1160.00') # 1000 + 160 IVA (objeto_imp: 02)
+      expect(cfdi['Total']).to eq('1160.00') # 1000 + 160 IVA (user-provided)
     end
   end
 end

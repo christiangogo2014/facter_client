@@ -4,10 +4,6 @@ require 'bigdecimal'
 
 module FacterClient
   module CFDI
-    IVA_RATE = '0.160000'
-    IVA_IMPUESTO = '002'
-    IVA_TIPO_FACTOR = 'Tasa'
-
     module_function
 
     def build_income(
@@ -108,6 +104,7 @@ module FacterClient
         cantidad = BigDecimal(hash[:cantidad].to_s)
         importe = valor_unitario * cantidad
         objeto_imp = hash[:objeto_imp] || hash[:ObjetoImp] || '01'
+        impuestos = hash[:impuestos] || hash[:Impuestos]
 
         {
           clave_prod_serv: hash[:clave_prod_serv] || hash[:ClaveProdServ],
@@ -120,7 +117,7 @@ module FacterClient
           importe: format_money(importe),
           descuento: hash[:descuento] ? format_money(BigDecimal(hash[:descuento].to_s)) : nil,
           objeto_imp: objeto_imp,
-          impuestos: objeto_imp == '02' ? build_concepto_impuestos(importe) : nil
+          impuestos: impuestos
         }
       end
 
@@ -141,35 +138,33 @@ module FacterClient
         hash
       end
 
-      def build_concepto_impuestos(base)
-        iva_importe = base * BigDecimal(IVA_RATE)
+      def build_impuestos(conceptos, _total_impuestos)
+        all_traslados = []
+        all_retenciones = []
 
-        {
-          'Traslados' => [
-            {
-              'Base' => format_money(base),
-              'Impuesto' => IVA_IMPUESTO,
-              'TipoFactor' => IVA_TIPO_FACTOR,
-              'TasaOCuota' => IVA_RATE,
-              'Importe' => format_money(iva_importe)
-            }
-          ],
-          'Retenciones' => []
-        }
-      end
-
-      def build_impuestos(conceptos, total_impuestos)
-        taxable = conceptos.select { |c| c[:impuestos] }
-        return nil if taxable.empty?
-
-        traslados = taxable.map do |c|
-          c[:impuestos]['Traslados'].first
+        conceptos.each do |c|
+          next unless c[:impuestos]
+          all_traslados.concat(c[:impuestos]['Traslados'] || [])
+          all_retenciones.concat(c[:impuestos]['Retenciones'] || [])
         end
 
-        {
-          'TotalImpuestosTrasladados' => format_money(total_impuestos),
-          'Traslados' => traslados
-        }
+        return nil if all_traslados.empty? && all_retenciones.empty?
+
+        result = {}
+
+        if all_traslados.any?
+          total_traslados = all_traslados.sum { |t| BigDecimal(t['Importe'].to_s) }
+          result['TotalImpuestosTrasladados'] = format_money(total_traslados)
+          result['Traslados'] = all_traslados
+        end
+
+        if all_retenciones.any?
+          total_retenciones = all_retenciones.sum { |r| BigDecimal(r['Importe'].to_s) }
+          result['TotalImpuestosRetenidos'] = format_money(total_retenciones)
+          result['Retenciones'] = all_retenciones
+        end
+
+        result
       end
 
       def calculate_subtotal(conceptos)
@@ -177,10 +172,17 @@ module FacterClient
       end
 
       def calculate_total_impuestos(conceptos)
-        conceptos.sum do |c|
-          next 0 unless c[:impuestos]
-          c[:impuestos]['Traslados'].sum { |t| BigDecimal(t['Importe']) }
+        traslados_total = conceptos.sum do |c|
+          next 0 unless c[:impuestos] && c[:impuestos]['Traslados']
+          c[:impuestos]['Traslados'].sum { |t| BigDecimal(t['Importe'].to_s) }
         end
+
+        retenciones_total = conceptos.sum do |c|
+          next 0 unless c[:impuestos] && c[:impuestos]['Retenciones']
+          c[:impuestos]['Retenciones'].sum { |r| BigDecimal(r['Importe'].to_s) }
+        end
+
+        traslados_total - retenciones_total
       end
 
       def normalize_emisor(emisor)
