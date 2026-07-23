@@ -7,7 +7,7 @@ Pure Ruby client for the [Facter](https://v2.facter.com.mx) CFDI 4.0 API (SAT Me
 Add to your Gemfile:
 
 ```ruby
-gem 'facter_client', path: '../facter_client'
+gem 'facter_client', git: 'https://github.com/christiangogo2014/facter_client'
 ```
 
 ## Configuration
